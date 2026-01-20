@@ -4,6 +4,9 @@ import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import ItineraryList from './pages/agent/ItineraryList';
 import ItineraryBuilder from './components/itinerary/ItineraryBuilder';
+import Destinations from './pages/admin/Destinations';
+import Inventory from './pages/admin/Inventory';
+import Bookings from './pages/operator/Bookings';
 import ProtectedRoute from './components/ProtectedRoute';
 
 function App() {
@@ -13,12 +16,28 @@ function App() {
         <Routes>
           <Route path="/login" element={<Login />} />
           
-          <Route path="/" element={
+          <Route path="/" element={<Navigate to="/dashboard" />} />
+          
+          <Route path="/dashboard" element={
             <ProtectedRoute>
               <Dashboard />
             </ProtectedRoute>
           } />
 
+          {/* Admin Routes */}
+          <Route path="/destinations" element={
+            <ProtectedRoute roles={['admin', 'staff']}>
+              <Destinations />
+            </ProtectedRoute>
+          } />
+
+          <Route path="/inventory" element={
+            <ProtectedRoute roles={['admin', 'staff']}>
+              <Inventory />
+            </ProtectedRoute>
+          } />
+
+          {/* Agent Routes */}
           <Route path="/itineraries" element={
             <ProtectedRoute roles={['agent']}>
               <ItineraryList />
@@ -31,7 +50,14 @@ function App() {
             </ProtectedRoute>
           } />
 
-          <Route path="*" element={<Navigate to="/" />} />
+          {/* Operator Routes */}
+          <Route path="/bookings" element={
+            <ProtectedRoute roles={['operator']}>
+              <Bookings />
+            </ProtectedRoute>
+          } />
+
+          <Route path="*" element={<Navigate to="/dashboard" />} />
         </Routes>
       </BrowserRouter>
     </AuthProvider>

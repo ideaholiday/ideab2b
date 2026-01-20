@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect } from 'react';
-import { login as apiLogin, logout as apiLogout, getUser } from '../services/api';
+import * as api from '../services/api';
 
 const AuthContext = createContext();
 
@@ -15,8 +15,8 @@ export const AuthProvider = ({ children }) => {
     const token = localStorage.getItem('token');
     if (token) {
       try {
-        const response = await getUser();
-        setUser(response.data);
+        const response = await api.getMe();
+        setUser(response.data.data);
       } catch (error) {
         localStorage.removeItem('token');
       }
@@ -25,14 +25,19 @@ export const AuthProvider = ({ children }) => {
   };
 
   const login = async (credentials) => {
-    const response = await apiLogin(credentials);
-    localStorage.setItem('token', response.data.token);
-    setUser(response.data.user);
-    return response.data.user;
+    const response = await api.login(credentials);
+    const token = response.data.data?.token || response.data.data;
+    localStorage.setItem('token', token);
+    setUser(response.data.data);
+    return response.data.data;
   };
 
   const logout = async () => {
-    await apiLogout();
+    try {
+      await api.logout();
+    } catch (err) {
+      console.error('Logout error:', err);
+    }
     localStorage.removeItem('token');
     setUser(null);
   };
