@@ -1,3 +1,7 @@
+options:
+  machineType: 'N1_HIGHCPU_8'
+  logging: CLOUD_LOGGING_ONLY
+
 steps:
   # Build backend image
   - name: 'gcr.io/cloud-builders/docker'
@@ -9,8 +13,9 @@ steps:
       - '-t'
       - 'asia-south2-docker.pkg.dev/$PROJECT_ID/ideab2b/api:latest'
       - '-f'
-      - 'backend/Dockerfile'
-      - './backend'
+      - './Dockerfile'
+      - '.'
+    dir: 'backend'
 
   # Build frontend image
   - name: 'gcr.io/cloud-builders/docker'
@@ -22,8 +27,9 @@ steps:
       - '-t'
       - 'asia-south2-docker.pkg.dev/$PROJECT_ID/ideab2b/web:latest'
       - '-f'
-      - 'frontend/Dockerfile'
-      - './frontend'
+      - './Dockerfile'
+      - '.'
+    dir: 'frontend'
 
   # Push backend image
   - name: 'gcr.io/cloud-builders/docker'
@@ -42,28 +48,37 @@ steps:
     waitFor: ['build-frontend']
 
   # Deploy backend to Cloud Run
-  - name: 'gcr.io/cloud-builders/gke-deploy'
+  - name: 'gcr.io/cloud-builders/run'
     id: 'deploy-backend'
     args:
-      - 'run'
-      - '--filename=./k8s'
+      - 'deploy'
+      - 'ideab2b-api'
       - '--image=asia-south2-docker.pkg.dev/$PROJECT_ID/ideab2b/api:$COMMIT_SHA'
-      - '--location=asia-south2'
-      - '--namespace=ideab2b'
+      - '--region=asia-south2'
+      - '--platform=managed'
+      - '--allow-unauthenticated'
+      - '--set-env-vars=APP_ENV=production'
+      - '--memory=2Gi'
+      - '--cpu=2'
     env:
-      - 'CLOUDSDK_COMPUTE_REGION=asia-south2'
+      - 'CLOUDSDK_RUN_REGION=asia-south2'
+    waitFor: ['push-backend']
 
   # Deploy frontend to Cloud Run
-  - name: 'gcr.io/cloud-builders/gke-deploy'
+  - name: 'gcr.io/cloud-builders/run'
     id: 'deploy-frontend'
     args:
-      - 'run'
-      - '--filename=./k8s'
+      - 'deploy'
+      - 'ideab2b-web'
       - '--image=asia-south2-docker.pkg.dev/$PROJECT_ID/ideab2b/web:$COMMIT_SHA'
-      - '--location=asia-south2'
-      - '--namespace=ideab2b'
+      - '--region=asia-south2'
+      - '--platform=managed'
+      - '--allow-unauthenticated'
+      - '--memory=1Gi'
+      - '--cpu=1'
     env:
-      - 'CLOUDSDK_COMPUTE_REGION=asia-south2'
+      - 'CLOUDSDK_RUN_REGION=asia-south2'
+    waitFor: ['push-frontend']
 
 images:
   - 'asia-south2-docker.pkg.dev/$PROJECT_ID/ideab2b/api:$COMMIT_SHA'
@@ -71,12 +86,4 @@ images:
   - 'asia-south2-docker.pkg.dev/$PROJECT_ID/ideab2b/api:latest'
   - 'asia-south2-docker.pkg.dev/$PROJECT_ID/ideab2b/web:latest'
 
-substitutions:
-  _SERVICE_NAME: 'ideab2b'
-  _REGION: 'asia-south2'
-
-options:
-  machineType: 'N1_HIGHCPU_8'
-  logging: CLOUD_LOGGING_ONLY
-  
 timeout: '3600s'
