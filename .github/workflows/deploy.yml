@@ -1,0 +1,179 @@
+name: Deploy to Google Cloud
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+    branches:
+      - main
+      - develop
+
+env:
+  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  REGION: asia-south2
+  REGISTRY: asia-south2-docker.pkg.dev
+  SERVICE_NAME: ideab2b
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      backend-image: ${{ steps.meta-backend.outputs.image }}
+      frontend-image: ${{ steps.meta-frontend.outputs.image }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v1
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v1
+
+      - name: Configure Docker
+        run: |
+          gcloud auth configure-docker ${{ env.REGISTRY }}
+
+      - name: Generate metadata - Backend
+        id: meta-backend
+        run: |
+          echo "image=${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${{ env.SERVICE_NAME }}/api:${{ github.sha }}" >> $GITHUB_OUTPUT
+
+      - name: Generate metadata - Frontend
+        id: meta-frontend
+        run: |
+          echo "image=${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${{ env.SERVICE_NAME }}/web:${{ github.sha }}" >> $GITHUB_OUTPUT
+
+  build-backend:
+    needs: setup
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v1
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v1
+
+      - name: Configure Docker
+        run: |
+          gcloud auth configure-docker ${{ env.REGISTRY }}
+
+      - name: Build Backend Image
+        run: |
+          docker build \
+            -t ${{ needs.setup.outputs.backend-image }} \
+            -t ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${{ env.SERVICE_NAME }}/api:latest \
+            -f backend/Dockerfile \
+            .
+
+      - name: Push Backend Image
+        run: |
+          docker push ${{ needs.setup.outputs.backend-image }}
+          docker push ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${{ env.SERVICE_NAME }}/api:latest
+
+  build-frontend:
+    needs: setup
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v1
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v1
+
+      - name: Configure Docker
+        run: |
+          gcloud auth configure-docker ${{ env.REGISTRY }}
+
+      - name: Build Frontend Image
+        run: |
+          docker build \
+            -t ${{ needs.setup.outputs.frontend-image }} \
+            -t ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${{ env.SERVICE_NAME }}/web:latest \
+            -f frontend/Dockerfile \
+            .
+
+      - name: Push Frontend Image
+        run: |
+          docker push ${{ needs.setup.outputs.frontend-image }}
+          docker push ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${{ env.SERVICE_NAME }}/web:latest
+
+  deploy:
+    needs: [setup, build-backend, build-frontend]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v1
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v1
+
+      - name: Deploy Backend to Cloud Run
+        run: |
+          gcloud run deploy ideab2b-api \
+            --image=${{ needs.setup.outputs.backend-image }} \
+            --region=${{ env.REGION }} \
+            --platform=managed \
+            --allow-unauthenticated \
+            --set-env-vars=APP_ENV=production,APP_DEBUG=false \
+            --memory=1Gi \
+            --cpu=1 \
+            --timeout=3600
+
+      - name: Deploy Frontend to Cloud Run
+        run: |
+          gcloud run deploy ideab2b-web \
+            --image=${{ needs.setup.outputs.frontend-image }} \
+            --region=${{ env.REGION }} \
+            --platform=managed \
+            --allow-unauthenticated \
+            --memory=512Mi \
+            --cpu=1 \
+            --timeout=3600
+
+      - name: Output Service URLs
+        run: |
+          echo "✅ Deployment Complete!"
+          echo ""
+          echo "Backend API: $(gcloud run services describe ideab2b-api --region=${{ env.REGION }} --format='value(status.url)')"
+          echo "Frontend Web: $(gcloud run services describe ideab2b-web --region=${{ env.REGION }} --format='value(status.url)')"
