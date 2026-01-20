@@ -1,0 +1,334 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ideab2b
+
+---
+# Backend Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ideab2b-api
+  namespace: ideab2b
+  labels:
+    app: ideab2b-api
+    version: v1
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: ideab2b-api
+  template:
+    metadata:
+      labels:
+        app: ideab2b-api
+        version: v1
+    spec:
+      containers:
+      - name: api
+        image: asia-south2-docker.pkg.dev/173142818446/ideab2b/api:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8080
+          name: http
+        env:
+        - name: APP_ENV
+          value: "production"
+        - name: APP_DEBUG
+          value: "false"
+        - name: LOG_CHANNEL
+          value: "stderr"
+        - name: DB_HOST
+          valueFrom:
+            secretKeyRef:
+              name: ideab2b-secrets
+              key: db-host
+        - name: DB_DATABASE
+          value: "ideab2b"
+        - name: DB_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: ideab2b-secrets
+              key: db-username
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: ideab2b-secrets
+              key: db-password
+        - name: REDIS_HOST
+          valueFrom:
+            secretKeyRef:
+              name: ideab2b-secrets
+              key: redis-host
+        - name: APP_KEY
+          valueFrom:
+            secretKeyRef:
+              name: ideab2b-secrets
+              key: app-key
+        - name: JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: ideab2b-secrets
+              key: jwt-secret
+        resources:
+          requests:
+            cpu: 500m
+            memory: 256Mi
+          limits:
+            cpu: 1000m
+            memory: 512Mi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        volumeMounts:
+        - name: storage
+          mountPath: /app/storage
+      volumes:
+      - name: storage
+        emptyDir: {}
+
+---
+# Frontend Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ideab2b-web
+  namespace: ideab2b
+  labels:
+    app: ideab2b-web
+    version: v1
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: ideab2b-web
+  template:
+    metadata:
+      labels:
+        app: ideab2b-web
+        version: v1
+    spec:
+      containers:
+      - name: web
+        image: asia-south2-docker.pkg.dev/173142818446/ideab2b/web:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 5173
+          name: http
+        env:
+        - name: VITE_API_URL
+          value: "https://ideab2b-api.ideab2b.svc.cluster.local/api"
+        resources:
+          requests:
+            cpu: 250m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 5173
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 5173
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+
+---
+# Backend Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: ideab2b-api
+  namespace: ideab2b
+  labels:
+    app: ideab2b-api
+spec:
+  type: ClusterIP
+  ports:
+  - port: 80
+    targetPort: 8080
+    protocol: TCP
+    name: http
+  selector:
+    app: ideab2b-api
+
+---
+# Frontend Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: ideab2b-web
+  namespace: ideab2b
+  labels:
+    app: ideab2b-web
+spec:
+  type: LoadBalancer
+  ports:
+  - port: 80
+    targetPort: 5173
+    protocol: TCP
+    name: http
+  - port: 443
+    targetPort: 5173
+    protocol: TCP
+    name: https
+  selector:
+    app: ideab2b-web
+
+---
+# HorizontalPodAutoscaler for API
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: ideab2b-api-hpa
+  namespace: ideab2b
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: ideab2b-api
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+
+---
+# HorizontalPodAutoscaler for Web
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: ideab2b-web-hpa
+  namespace: ideab2b
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: ideab2b-web
+  minReplicas: 2
+  maxReplicas: 5
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 75
+
+---
+# NetworkPolicy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ideab2b-network-policy
+  namespace: ideab2b
+spec:
+  podSelector:
+    matchLabels:
+      app: ideab2b-api
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: ideab2b-web
+    ports:
+    - protocol: TCP
+      port: 8080
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: ingress-nginx
+    ports:
+    - protocol: TCP
+      port: 8080
+  egress:
+  - to:
+    - podSelector:
+        matchLabels:
+          app: ideab2b-web
+  - to:
+    - namespaceSelector: {}
+    ports:
+    - protocol: TCP
+      port: 443
+    - protocol: TCP
+      port: 3306
+    - protocol: TCP
+      port: 6379
+
+---
+# ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ideab2b-config
+  namespace: ideab2b
+data:
+  APP_NAME: "IdeaB2B Travel Platform"
+  APP_ENV: "production"
+  LOG_CHANNEL: "stderr"
+  CACHE_DRIVER: "redis"
+  SESSION_DRIVER: "redis"
+  QUEUE_CONNECTION: "redis"
+  VITE_API_URL: "https://ideab2b-api.ideab2b.svc.cluster.local/api"
+
+---
+# PodDisruptionBudget for API
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ideab2b-api-pdb
+  namespace: ideab2b
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: ideab2b-api
+
+---
+# PodDisruptionBudget for Web
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ideab2b-web-pdb
+  namespace: ideab2b
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: ideab2b-web

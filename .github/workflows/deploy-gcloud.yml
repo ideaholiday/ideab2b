@@ -1,0 +1,197 @@
+name: Deploy to Google Cloud Run
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  PROJECT_ID: ideab2b
+  REGION: asia-south2
+  REGISTRY: asia-south2-docker.pkg.dev
+
+jobs:
+  setup:
+    name: Setup
+    runs-on: ubuntu-latest
+    outputs:
+      api-image: ${{ steps.image.outputs.api-image }}
+      web-image: ${{ steps.image.outputs.web-image }}
+    steps:
+      - name: Generate image names
+        id: image
+        run: |
+          echo "api-image=${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/ideab2b/api:${{ github.sha }}" >> $GITHUB_OUTPUT
+          echo "web-image=${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/ideab2b/web:${{ github.sha }}" >> $GITHUB_OUTPUT
+
+  build-and-push:
+    name: Build and Push Docker Images
+    runs-on: ubuntu-latest
+    needs: setup
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v1
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v1
+
+      - name: Configure Docker for artifact registry
+        run: |
+          gcloud auth configure-docker ${{ env.REGISTRY }}
+
+      - name: Build backend image
+        run: |
+          docker build \
+            -t ${{ needs.setup.outputs.api-image }} \
+            -t ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/ideab2b/api:latest \
+            -f backend/Dockerfile \
+            ./backend
+
+      - name: Build frontend image
+        run: |
+          docker build \
+            -t ${{ needs.setup.outputs.web-image }} \
+            -t ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/ideab2b/web:latest \
+            -f frontend/Dockerfile \
+            ./frontend
+
+      - name: Push backend image
+        run: |
+          docker push ${{ needs.setup.outputs.api-image }}
+          docker push ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/ideab2b/api:latest
+
+      - name: Push frontend image
+        run: |
+          docker push ${{ needs.setup.outputs.web-image }}
+          docker push ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/ideab2b/web:latest
+
+  deploy:
+    name: Deploy to Cloud Run
+    runs-on: ubuntu-latest
+    needs: [setup, build-and-push]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v1
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v1
+
+      - name: Deploy backend to Cloud Run
+        run: |
+          gcloud run deploy ideab2b-api \
+            --image ${{ needs.setup.outputs.api-image }} \
+            --platform managed \
+            --region ${{ env.REGION }} \
+            --allow-unauthenticated \
+            --set-env-vars=\
+          APP_ENV=production,\
+          LOG_CHANNEL=stderr,\
+          SANCTUM_STATEFUL_DOMAINS=${{ secrets.SANCTUM_DOMAINS }},\
+          SESSION_DOMAIN=${{ secrets.SESSION_DOMAIN }} \
+            --set-secrets=\
+          DB_HOST=ideab2b-db-host:latest,\
+          DB_USERNAME=ideab2b-db-user:latest,\
+          DB_PASSWORD=ideab2b-db-password:latest,\
+          APP_KEY=ideab2b-app-key:latest,\
+          JWT_SECRET=ideab2b-jwt-secret:latest \
+            --service-account=ideab2b-cloudrun@${{ env.PROJECT_ID }}.iam.gserviceaccount.com \
+            --cpu=2 \
+            --memory=512Mi \
+            --timeout=3600s \
+            --max-instances=100
+
+      - name: Deploy frontend to Cloud Run
+        run: |
+          gcloud run deploy ideab2b-web \
+            --image ${{ needs.setup.outputs.web-image }} \
+            --platform managed \
+            --region ${{ env.REGION }} \
+            --allow-unauthenticated \
+            --set-env-vars=\
+          VITE_API_URL=https://ideab2b-api-${{ env.REGION }}-${{ secrets.GCP_PROJECT_ID }}.run.app/api \
+            --service-account=ideab2b-cloudrun@${{ env.PROJECT_ID }}.iam.gserviceaccount.com \
+            --cpu=1 \
+            --memory=256Mi \
+            --timeout=3600s \
+            --max-instances=50
+
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    needs: setup
+    if: github.event_name == 'pull_request'
+
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_DATABASE: ideab2b_test
+          MYSQL_ROOT_PASSWORD: root
+        options: >-
+          --health-cmd="mysqladmin ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=3
+        ports:
+          - 3306:3306
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.1'
+          extensions: pdo, pdo_mysql, bcmath, ctype, json, zip
+
+      - name: Setup Node
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+
+      - name: Install backend dependencies
+        run: |
+          cd backend
+          composer install --no-interaction
+
+      - name: Install frontend dependencies
+        run: |
+          cd frontend
+          npm ci
+
+      - name: Run backend tests
+        run: |
+          cd backend
+          php artisan test
+
+      - name: Run frontend tests
+        run: |
+          cd frontend
+          npm test

@@ -1,0 +1,66 @@
+# This file specifies files that are *not* uploaded to Google Cloud
+# when running `gcloud app deploy` or `gcloud builds submit`.
+
+# Git files
+.git
+.gitignore
+.gitattributes
+
+# Node files
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Test files
+__tests__/
+tests/
+*.test.js
+*.spec.js
+
+# Documentation
+README.md
+CONTRIBUTING.md
+LICENSE
+docs/
+
+# Docker files (not needed for Cloud Run)
+docker-compose.yml
+Dockerfile
+.dockerignore
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Build artifacts
+dist/
+build/
+.next/
+out/
+
+# Cache
+.cache/
+.eslintcache
+.stylelintcache
+
+# Logs
+logs/
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Additional
+.github/
+.gitpod.yml
+.editorconfig

@@ -1,0 +1,82 @@
+steps:
+  # Build backend image
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'build-backend'
+    args:
+      - 'build'
+      - '-t'
+      - 'asia-south2-docker.pkg.dev/$PROJECT_ID/ideab2b/api:$COMMIT_SHA'
+      - '-t'
+      - 'asia-south2-docker.pkg.dev/$PROJECT_ID/ideab2b/api:latest'
+      - '-f'
+      - 'backend/Dockerfile'
+      - './backend'
+
+  # Build frontend image
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'build-frontend'
+    args:
+      - 'build'
+      - '-t'
+      - 'asia-south2-docker.pkg.dev/$PROJECT_ID/ideab2b/web:$COMMIT_SHA'
+      - '-t'
+      - 'asia-south2-docker.pkg.dev/$PROJECT_ID/ideab2b/web:latest'
+      - '-f'
+      - 'frontend/Dockerfile'
+      - './frontend'
+
+  # Push backend image
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'push-backend'
+    args:
+      - 'push'
+      - 'asia-south2-docker.pkg.dev/$PROJECT_ID/ideab2b/api:$COMMIT_SHA'
+    waitFor: ['build-backend']
+
+  # Push frontend image
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'push-frontend'
+    args:
+      - 'push'
+      - 'asia-south2-docker.pkg.dev/$PROJECT_ID/ideab2b/web:$COMMIT_SHA'
+    waitFor: ['build-frontend']
+
+  # Deploy backend to Cloud Run
+  - name: 'gcr.io/cloud-builders/gke-deploy'
+    id: 'deploy-backend'
+    args:
+      - 'run'
+      - '--filename=./k8s'
+      - '--image=asia-south2-docker.pkg.dev/$PROJECT_ID/ideab2b/api:$COMMIT_SHA'
+      - '--location=asia-south2'
+      - '--namespace=ideab2b'
+    env:
+      - 'CLOUDSDK_COMPUTE_REGION=asia-south2'
+
+  # Deploy frontend to Cloud Run
+  - name: 'gcr.io/cloud-builders/gke-deploy'
+    id: 'deploy-frontend'
+    args:
+      - 'run'
+      - '--filename=./k8s'
+      - '--image=asia-south2-docker.pkg.dev/$PROJECT_ID/ideab2b/web:$COMMIT_SHA'
+      - '--location=asia-south2'
+      - '--namespace=ideab2b'
+    env:
+      - 'CLOUDSDK_COMPUTE_REGION=asia-south2'
+
+images:
+  - 'asia-south2-docker.pkg.dev/$PROJECT_ID/ideab2b/api:$COMMIT_SHA'
+  - 'asia-south2-docker.pkg.dev/$PROJECT_ID/ideab2b/web:$COMMIT_SHA'
+  - 'asia-south2-docker.pkg.dev/$PROJECT_ID/ideab2b/api:latest'
+  - 'asia-south2-docker.pkg.dev/$PROJECT_ID/ideab2b/web:latest'
+
+substitutions:
+  _SERVICE_NAME: 'ideab2b'
+  _REGION: 'asia-south2'
+
+options:
+  machineType: 'N1_HIGHCPU_8'
+  logging: CLOUD_LOGGING_ONLY
+  
+timeout: '3600s'
